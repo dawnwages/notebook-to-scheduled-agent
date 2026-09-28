@@ -12,15 +12,14 @@ whether the idea is any good. The trouble starts on day two, when the notebook h
 
 This tutorial takes one small, useful agent from a notebook to a scheduled, retrying, cached,
 observable [Prefect](https://www.prefect.io) flow. It takes about 20 minutes. Every line is in
-[the companion repo](https://github.com/dawnwages/notebook-to-scheduled-agent), and the video follows
-the same four chapters.
+[the companion repo](https://github.com/dawnwages/notebook-to-scheduled-agent).
 
 **The question the agent answers:** *did any package I depend on ship something this week that I need to
 act on?*
 
 ---
 
-## Chapter 1 (0:00–3:00): The notebook that works once
+## Chapter 1: The notebook that works once
 
 Here's the honest first version: loop over some packages, ask PyPI what's new, and ask a model about it.
 
@@ -47,7 +46,7 @@ The notebook also can't:
 
 Each of the next chapters fixes one or more of those.
 
-## Chapter 2 (3:00–7:00): Pull out plain functions
+## Chapter 2: Pull out plain functions
 
 Before adding any framework, move the logic into a module with no Prefect and no LLM in it:
 [`pypi.py`](https://github.com/dawnwages/notebook-to-scheduled-agent/blob/main/src/release_watch/pypi.py).
@@ -75,7 +74,7 @@ code today and a bug report next month.
 Plain functions also mean plain tests. The repo tests this against a fixture that includes a yanked
 release, a release candidate and a major version bump, with no network.
 
-## Chapter 3 (7:00–12:00): An agent with a typed output
+## Chapter 3: An agent with a typed output
 
 Now the model. The notebook asked "what changed?" and got back a paragraph based on what the model
 remembered from training. We want two things instead: the model should **read the actual release
@@ -119,7 +118,7 @@ already know.** The model has no business restating facts the code already has. 
 a test model, it filled those fields with `"a"`. Even if a real model usually gets them right, "usually"
 isn't good enough for a field you'd sort or alert on.
 
-## Chapter 4 (12:00–17:00): Wrap it in Prefect
+## Chapter 4: Wrap it in Prefect
 
 Here's everything the notebook couldn't do, added with decorators around the functions we already
 have:
@@ -170,7 +169,7 @@ One thing I left out deliberately: `timeout_seconds` on these sync tasks. Prefec
 timeout can't interrupt a blocking network call in a worker thread, so the real timeout lives on the
 `httpx` client. I'd rather have a guard that works than one that looks good in a screenshot.
 
-## Chapter 5 (17:00–20:00): Put it on a schedule
+## Chapter 5: Put it on a schedule
 
 ```python
 if __name__ == "__main__":
