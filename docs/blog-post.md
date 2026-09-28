@@ -187,9 +187,6 @@ cache hits, token usage in the logs, and the report as an artifact. `serve()` is
 laptop or a single box. When you outgrow it, the same flow deploys to a work pool without changing any
 of the code above.
 
-**What a run looks like:** <!-- TODO(Dawn): after the first real run, add a screenshot of the artifact
-and the actual numbers: releases found, briefs written, total tokens, cost, wall time. Do not publish
-with invented figures. -->
 
 ## Testing an agent without a key
 
