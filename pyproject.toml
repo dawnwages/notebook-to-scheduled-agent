@@ -1,0 +1,26 @@
+[project]
+name = "release-watch"
+version = "0.1.0"
+description = "From notebook to scheduled agent: a Prefect + Pydantic AI release watcher"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "httpx>=0.28.1",
+    "packaging>=26.3",
+    "prefect>=3.8",
+    "pydantic-ai-slim[anthropic]>=2.51",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.15,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.3.0",
+    "nbconvert>=7.17.1",
+    "nbformat>=5.11.1",
+    "pytest>=9.1.1",
+    "respx>=0.23.1",
+]
