@@ -7,21 +7,20 @@ repo: https://github.com/dawnwages/notebook-to-scheduled-agent
 
 # From notebook to scheduled agent in 20 minutes
 
-Most agents I see in the wild are notebooks. That's not an insult: the notebook is where you find out
-whether the idea is any good. The trouble starts on day two, when the notebook has to run without you.
+A lot of the agents I get asked about are still notebooks. That's a fine place to start, because a
+notebook is how you find out whether the idea works. It stops being fine when the notebook needs to run
+every morning without you opening it.
 
-This tutorial takes one small, useful agent from a notebook to a scheduled, retrying, cached,
-observable [Prefect](https://www.prefect.io) flow. It takes about 20 minutes. Every line is in
-[the companion repo](https://github.com/dawnwages/notebook-to-scheduled-agent).
+In this tutorial I take a small agent from a notebook to a Prefect flow that runs on a schedule, retries
+failed calls, caches model output and keeps a history of every run. It takes about 20 minutes. All of
+the code is in [the companion repo](https://github.com/dawnwages/notebook-to-scheduled-agent).
 
-**The question the agent answers:** *did any package I depend on ship something this week that I need to
-act on?*
-
----
+The agent checks whether any package I depend on shipped a release this week that I need to act on.
 
 ## Chapter 1: The notebook that works once
 
-Here's the honest first version: loop over some packages, ask PyPI what's new, and ask a model about it.
+The first version loops over a list of packages, asks PyPI what's new, and asks a model about each
+release.
 
 ```python
 new = []
@@ -32,23 +31,18 @@ for name in PACKAGES:
             new.append((name, version))
 ```
 
-When I ran it, it returned `prefect 3.8.7.dev5`, `.dev6` and `.dev7` next to the real `3.8.7` release.
-That's the first bug, and it's a good example of the general problem: the notebook *works*, but it's
-wrong in ways you only find out from real data.
+When I ran it, the results included `prefect 3.8.7.dev5`, `.dev6` and `.dev7` alongside the real
+`3.8.7` release. The code ran without errors and still gave the wrong answer, and I only noticed
+because I ran it against real data.
 
-The notebook also can't:
-
-- run on its own,
-- survive one slow response from PyPI,
-- avoid paying for the same model call twice,
-- give me output a program can use, or
-- show me what happened last Tuesday.
-
-Each of the next chapters fixes one or more of those.
+The notebook also can't run on its own, retry when PyPI is slow, skip model calls it has already made,
+return output another program can read, or tell me what happened on a previous run. The next four
+chapters deal with those.
 
 ## Chapter 2: Pull out plain functions
 
-Before adding any framework, move the logic into a module with no Prefect and no LLM in it:
+Before adding any framework, I moved the logic into a module that doesn't import Prefect or call a
+model:
 [`pypi.py`](https://github.com/dawnwages/notebook-to-scheduled-agent/blob/main/src/release_watch/pypi.py).
 
 ```python
@@ -67,20 +61,19 @@ def stable_versions(project: dict) -> list[tuple[Version, datetime]]:
         ...
 ```
 
-This is where the `.dev` bug dies. It dies in `packaging.version`, not in a prompt. **If a rule has to be
-correct rather than plausible, write it as code.** Letting the model filter prereleases would be less
-code today and a bug report next month.
+`packaging.version` fixes the `.dev` problem. I could have asked the model to ignore prereleases, but
+this is a rule with one correct answer, and code gets it right every time.
 
-Plain functions also mean plain tests. The repo tests this against a fixture that includes a yanked
-release, a release candidate and a major version bump, with no network.
+Because these are ordinary functions, the tests are ordinary too. The repo checks them against a
+fixture with a yanked release, a release candidate and a major version bump, without touching the
+network.
 
 ## Chapter 3: An agent with a typed output
 
-Now the model. The notebook asked "what changed?" and got back a paragraph based on what the model
-remembered from training. We want two things instead: the model should **read the actual release
-notes**, and it should **return data, not prose**.
+In the notebook, the model answered "what changed?" from whatever it remembered about the package. I
+wanted it to read the actual release notes and to return fields I could sort and filter on.
 
-With [Pydantic AI](https://ai.pydantic.dev), both are a few lines:
+[Pydantic AI](https://ai.pydantic.dev) handles both:
 
 ```python
 class ReleaseBrief(BaseModel):
@@ -106,22 +99,19 @@ def get_release_notes(ctx: RunContext[Deps], github_repo: str, version: str) -> 
     ...
 ```
 
-`output_type=ReleaseBrief` means the result either validates or the agent retries. The tool is what
-makes this an agent rather than a prompt: the model decides to fetch the notes, reads them, and reasons
-from what they actually say.
+With `output_type=ReleaseBrief`, Pydantic AI validates the response and asks the model to try again if
+it doesn't fit the schema. The `get_release_notes` tool lets the model fetch the notes for a release and
+base its summary on them.
 
-A small model like Haiku is plenty for this. The task is reading and classifying, not writing a novel,
-and at this volume it's worth optimizing for cost.
+I used Haiku. The job is reading notes and picking a risk level, so a small, cheap model is enough.
 
-One more rule I'll return to: after the run, **I overwrite `package` and `version` with the values I
-already know.** The model has no business restating facts the code already has. When I ran this against
-a test model, it filled those fields with `"a"`. Even if a real model usually gets them right, "usually"
-isn't good enough for a field you'd sort or alert on.
+After each run, I replace `package` and `version` in the output with the values the code already has.
+When I tested against Pydantic AI's test model, it filled both fields with `"a"`. A real model will
+usually copy them correctly, but these are the fields the report sorts on, so I don't rely on it.
 
 ## Chapter 4: Wrap it in Prefect
 
-Here's everything the notebook couldn't do, added with decorators around the functions we already
-have:
+Prefect handles the rest through decorators on the functions from the last two chapters:
 
 ```python
 @task(retries=3, retry_delay_seconds=[2, 10, 30])
@@ -152,22 +142,22 @@ def watch_releases(packages: list[str] = DEFAULT_PACKAGES, lookback_hours: int =
     return briefs
 ```
 
-What each line buys you:
+Here's what each piece does:
 
-- **`retries` with backoff** on the PyPI fetch. A slow afternoon on PyPI now costs you a retry, not the
-  whole run.
-- **`.map()`** fetches every package concurrently instead of one at a time.
-- **`cache_policy=INPUTS + TASK_SOURCE`** is my favorite line in the repo. A brief for a given release is
-  cached for a week, so rerunning the flow, or running it with overlapping time windows, never pays for
-  the same model call twice. Because the task's *source code* is part of the cache key, editing the
-  prompt invalidates the cache automatically.
-- **`task_run_name`** means the UI shows `brief-httpx-0.28.1` instead of `brief_release-7f3a`. That's
-  small, and you'll be grateful for it when you're debugging.
-- **`create_markdown_artifact`** publishes the ranked report, high-risk releases first, to the Prefect UI.
+- **`retries`** on the PyPI fetch waits 2, 10 and then 30 seconds between attempts, so one slow response
+  doesn't fail the run.
+- **`.map()`** fetches all the packages at the same time.
+- **`cache_policy=INPUTS + TASK_SOURCE`** caches each brief for a week, keyed on the release and on the
+  task's source code. Rerunning the flow, or running it with an overlapping time window, reuses the
+  cached brief instead of calling the model again. If I edit the prompt, the source changes and the
+  cache resets.
+- **`task_run_name`** labels runs in the UI as `brief-httpx-0.28.1` rather than a random suffix, which
+  makes the run history easier to scan.
+- **`create_markdown_artifact`** saves the report to the Prefect UI, with high-risk releases first.
 
-One thing I left out deliberately: `timeout_seconds` on these sync tasks. Prefect will warn you that a
-timeout can't interrupt a blocking network call in a worker thread, so the real timeout lives on the
-`httpx` client. I'd rather have a guard that works than one that looks good in a screenshot.
+I didn't use `timeout_seconds` on these tasks. They're synchronous, and Prefect warns that a timeout
+can't interrupt a blocking network call running in a worker thread. The timeout is set on the `httpx`
+client instead.
 
 ## Chapter 5: Put it on a schedule
 
@@ -181,34 +171,32 @@ uv run prefect server start          # in one terminal
 uv run python -m release_watch.flow  # in another
 ```
 
-That's it: every weekday at 8am, in the Prefect UI, you get the run history, each task's retries and
-cache hits, token usage in the logs, and the report as an artifact. `serve()` is the right tool for a
-laptop or a single box. When you outgrow it, the same flow deploys to a work pool without changing any
-of the code above.
-
+The flow now runs every weekday at 8am. The Prefect UI shows each run, each task's retries and cache
+hits, and the report. Token counts are in the task logs. `serve()` suits a laptop or a single server;
+for more than that, you can deploy the same flow to a Prefect work pool.
 
 ## Testing an agent without a key
 
-The whole flow runs in CI with no API key and no network:
+The tests run the whole flow in CI without an API key or network access:
 
 ```python
 briefs = watch_releases(packages=["examplepkg"], lookback_hours=24, model="test")
 ```
 
-`"test"` is Pydantic AI's `TestModel`: it calls every tool, then returns output that validates against
-your schema. HTTP is mocked with `respx`, and Prefect runs against a temporary local server via
-`prefect_test_harness()`. This doesn't test whether the model is *smart*. That's what evals are for,
-and they're the next post. It does test that the plumbing, retries, caching and report all work, and
-that's usually what breaks at 8am.
+`"test"` selects Pydantic AI's `TestModel`, which calls every tool and returns output that matches the
+schema. `respx` mocks the HTTP calls, and `prefect_test_harness()` runs Prefect against a temporary
+local server. These tests show that fetching, retries, caching and the report work. They can't tell you
+whether the model's risk ratings are any good. That needs an eval against labeled releases.
 
-## What to take with you
+## Summary
 
-1. **Start in a notebook.** Leave it once the notebook has told you the idea is worth keeping.
-2. **Layers point one way.** Data code knows nothing about LLMs, and agent code knows nothing about
-   orchestration.
-3. **Facts come from code; judgment comes from the model.**
-4. **Cache by input, not by time,** and include the prompt code in the key.
-5. **Put retries where failures actually happen.**
+- Prototype in a notebook, then move the code into modules once you know you'll keep it.
+- Keep the layers separate. `pypi.py` doesn't know about the model, and `agent.py` doesn't know about
+  Prefect.
+- Use code for anything with one right answer, such as version filtering, and the model for judgment
+  calls, such as risk.
+- Cache model calls on their inputs and on the source code of the task that makes them.
+- Add retries to the calls that fail in practice, which here are the network requests.
 
-The repo is MIT-licensed. Swap in your own dependency list, point `RELEASE_WATCH_MODEL` at a local model
-if you'd rather not send anything out, and let me know what it catches.
+The repo is MIT-licensed. You can change the package list, or set `RELEASE_WATCH_MODEL` to a local model
+if you'd rather not send anything to an API.
